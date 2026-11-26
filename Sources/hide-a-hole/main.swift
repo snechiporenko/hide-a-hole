@@ -12,11 +12,22 @@ func shouldShowBackdrop(for appearance: NSAppearance?) -> Bool {
     appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
 }
 
+final class AppearanceObserverView: NSView {
+    var onChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onChange?()
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panels: [NSPanel] = []
     private var fullFrames: [NSPanel: CGRect] = [:]
     private var animationGeneration = 0
     private var appearanceItem: NSStatusItem!
+    private var appearanceUpdate: DispatchWorkItem?
+    private var probeSized = false
     private var mouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var showBackdrop = false
@@ -28,12 +39,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         appearanceItem = NSStatusBar.system.statusItem(withLength: 0)
         appearanceItem.isVisible = true
+        if let button = appearanceItem.button {
+            let observer = AppearanceObserverView(frame: .zero)
+            observer.onChange = { [weak self] in self?.scheduleAppearanceUpdate() }
+            button.addSubview(observer)
+            if let window = button.window {
+                NotificationCenter.default.addObserver(self, selector: #selector(probeWindowResized), name: NSWindow.didResizeNotification, object: window)
+            }
+        }
         refreshConfiguration()
-        refreshAppearance()
+        scheduleAppearanceUpdate()
         updatePanels()
         let configTimer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             self?.refreshConfiguration()
-            self?.refreshAppearance()
         }
         RunLoop.main.add(configTimer, forMode: .common)
         let mouseEvents: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
@@ -86,12 +104,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func probeWindowResized() {
+        if !probeSized { scheduleAppearanceUpdate() }
+    }
+
+    private func scheduleAppearanceUpdate() {
+        appearanceUpdate?.cancel()
+        let update = DispatchWorkItem { [weak self] in self?.refreshAppearance() }
+        appearanceUpdate = update
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: update)
+    }
+
     private func refreshAppearance() {
-        if let window = appearanceItem.button?.window, window.frame.height > 0, let content = window.contentView,
+        if !probeSized, let window = appearanceItem.button?.window, window.frame.height > 0, let content = window.contentView,
            let constraint = content.constraintsAffectingLayout(for: .horizontal).first(where: {
                $0.firstItem as? NSView === content && $0.firstAttribute == .width && $0.secondAttribute == .width && $0.constant == 16
            }) {
             // shortcut: AppKit's status-item padding constraint may change, then the probe occupies its normal width.
+            probeSized = true
             constraint.isActive = false
             window.setContentSize(NSSize(width: 1, height: window.frame.height))
         }

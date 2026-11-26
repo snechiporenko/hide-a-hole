@@ -20,3 +20,13 @@ extension AppearanceTests {
         XCTAssertEqual(collapsed.height, frame.height)
     }
 }
+
+extension AppearanceTests {
+    func testAppearanceObserverNotifiesOnChange() {
+        let view = AppearanceObserverView(frame: .zero)
+        var changes = 0
+        view.onChange = { changes += 1 }
+        view.viewDidChangeEffectiveAppearance()
+        XCTAssertEqual(changes, 1)
+    }
+}
