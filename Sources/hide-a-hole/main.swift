@@ -1,31 +1,64 @@
 import AppKit
 
+func containsCursor(_ point: CGPoint, in frame: CGRect) -> Bool {
+    frame.contains(point) || (frame.width > 0 && frame.height > 0 && point.y == frame.maxY && point.x >= frame.minX && point.x < frame.maxX)
+}
+
+func collapsedFrame(_ frame: CGRect) -> CGRect {
+    CGRect(x: frame.midX - 0.5, y: frame.minY, width: 1, height: frame.height)
+}
+
+func shouldShowBackdrop(for appearance: NSAppearance?) -> Bool {
+    appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panels: [NSPanel] = []
+    private var fullFrames: [NSPanel: CGRect] = [:]
+    private var animationGeneration = 0
+    private var appearanceItem: NSStatusItem!
+    private var mouseMonitor: Any?
+    private var localMouseMonitor: Any?
+    private var showBackdrop = false
     private var lastMouseLocation = NSEvent.mouseLocation
     private var cursorColor: GradientColor = .transparent
     private var cursorRadius: CGFloat = 100
     private var lastConfigError: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        appearanceItem = NSStatusBar.system.statusItem(withLength: 0)
+        appearanceItem.isVisible = true
         refreshConfiguration()
+        refreshAppearance()
         updatePanels()
         let configTimer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             self?.refreshConfiguration()
+            self?.refreshAppearance()
         }
         RunLoop.main.add(configTimer, forMode: .common)
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+        let mouseEvents: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self] _ in
             self?.updateMouseLocation()
         }
-        RunLoop.main.add(timer, forMode: .common)
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self] event in
+            self?.updateMouseLocation()
+            return event
+        }
+        if mouseMonitor == nil {
+            // shortcut: poll if AppKit cannot install a global monitor; remove once monitoring is guaranteed.
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                self?.updateMouseLocation()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(updatePanels), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
     private func updateMouseLocation() {
-        guard cursorColor != .black else { return }
+        guard showBackdrop, cursorColor != .black else { return }
         let location = NSEvent.mouseLocation
         guard location != lastMouseLocation else { return }
-        for panel in panels where panel.frame.contains(location) || panel.frame.contains(lastMouseLocation) {
+        for panel in panels where containsCursor(location, in: panel.frame) || containsCursor(lastMouseLocation, in: panel.frame) {
             panel.contentView?.needsDisplay = true
         }
         lastMouseLocation = location
@@ -53,22 +86,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func refreshAppearance() {
+        if let window = appearanceItem.button?.window, window.frame.height > 0, let content = window.contentView,
+           let constraint = content.constraintsAffectingLayout(for: .horizontal).first(where: {
+               $0.firstItem as? NSView === content && $0.firstAttribute == .width && $0.secondAttribute == .width && $0.constant == 16
+           }) {
+            // shortcut: AppKit's status-item padding constraint may change, then the probe occupies its normal width.
+            constraint.isActive = false
+            window.setContentSize(NSSize(width: 1, height: window.frame.height))
+        }
+        let show = shouldShowBackdrop(for: appearanceItem.button?.effectiveAppearance)
+        guard show != showBackdrop else { return }
+        showBackdrop = show
+        animationGeneration += 1
+        let generation = animationGeneration
+        for panel in panels {
+            guard let fullFrame = fullFrames[panel] else { continue }
+            if show && !panel.isVisible {
+                panel.setFrame(collapsedFrame(fullFrame), display: true)
+                panel.orderFrontRegardless()
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.35
+                panel.animator().setFrame(show ? fullFrame : collapsedFrame(fullFrame), display: true)
+            } completionHandler: { [weak self, weak panel] in
+                guard let self, let panel, self.animationGeneration == generation, !self.showBackdrop else { return }
+                panel.orderOut(nil)
+            }
+        }
+    }
+
     @objc private func updatePanels() {
+        animationGeneration += 1
         panels.forEach { $0.close() }
+        fullFrames.removeAll()
         panels = NSScreen.screens.map { screen in
             let height = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
             let panel = NSPanel(contentRect: NSRect(x: screen.frame.minX, y: screen.frame.maxY - height, width: screen.frame.width, height: height), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.level = .mainMenu
             panel.backgroundColor = .clear
             panel.isOpaque = false
+            fullFrames[panel] = panel.frame
             let view = BackdropView(frame: NSRect(origin: .zero, size: panel.frame.size))
+            view.autoresizingMask = [.width, .height]
             view.cursorColor = cursorColor
             view.cursorRadius = cursorRadius
             panel.contentView = view
             panel.hasShadow = false
             panel.ignoresMouseEvents = true
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-            panel.orderFrontRegardless()
+            if showBackdrop { panel.orderFrontRegardless() }
             return panel
         }
     }
@@ -83,7 +150,7 @@ final class BackdropView: NSView {
         bounds.fill()
         guard cursorColor != .black, let window, let context = NSGraphicsContext.current?.cgContext else { return }
         let screenPoint = NSEvent.mouseLocation
-        guard window.frame.contains(screenPoint) else { return }
+        guard containsCursor(screenPoint, in: window.frame) else { return }
         let center = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
         let value = cursorColor.value
         let color = NSColor(srgbRed: CGFloat((value >> 24) & 255) / 255, green: CGFloat((value >> 16) & 255) / 255, blue: CGFloat((value >> 8) & 255) / 255, alpha: CGFloat(value & 255) / 255)

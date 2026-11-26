@@ -1,6 +1,6 @@
 # hide-a-hole
 
-A native macOS utility that draws a black backdrop behind the menu bar. It lets clicks pass through and adds a configurable gradient around the cursor. The backdrop uses the menu bar's original height without an offset.
+A native macOS utility that draws a black backdrop behind the menu bar. It lets clicks pass through and adds a configurable gradient around the cursor. The backdrop uses the menu bar's original height without an offset. It collapses toward the center when the menu bar uses a light appearance (typically dark icons), and expands from the center when it uses a dark appearance (typically light icons). Appearance is inferred from a one-point-wide status item and may not match custom-colored icons or every display. If macOS changes the status-item layout, the item may occupy its normal width.
 
 ## Usage
 
