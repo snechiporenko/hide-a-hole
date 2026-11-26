@@ -182,16 +182,18 @@ final class BackdropView: NSView {
         let screenPoint = NSEvent.mouseLocation
         guard containsCursor(screenPoint, in: window.frame) else { return }
         let center = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
-        let value = cursorColor.value
-        let color = NSColor(srgbRed: CGFloat((value >> 24) & 255) / 255, green: CGFloat((value >> 16) & 255) / 255, blue: CGFloat((value >> 8) & 255) / 255, alpha: CGFloat(value & 255) / 255)
-        let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [color.cgColor, NSColor.black.cgColor] as CFArray, locations: [0, 1])!
-        context.saveGState()
-        context.addEllipse(in: CGRect(x: center.x - cursorRadius, y: center.y - cursorRadius, width: cursorRadius * 2, height: cursorRadius * 2))
-        context.clip()
-        context.setBlendMode(.copy)
-        context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: cursorRadius, options: [])
-        context.restoreGState()
+        drawCursorGradient(in: context, center: center, radius: cursorRadius, color: cursorColor)
     }
+}
+
+func drawCursorGradient(in context: CGContext, center: CGPoint, radius: CGFloat, color: GradientColor) {
+    let value = color.value
+    let centerColor = NSColor(srgbRed: CGFloat((value >> 24) & 255) / 255, green: CGFloat((value >> 16) & 255) / 255, blue: CGFloat((value >> 8) & 255) / 255, alpha: CGFloat(value & 255) / 255)
+    let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [centerColor.cgColor, NSColor.black.cgColor] as CFArray, locations: [0, 1])!
+    context.saveGState()
+    context.setBlendMode(.copy)
+    context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: .drawsAfterEndLocation)
+    context.restoreGState()
 }
 
 let label = "com.hide-a-hole.agent"
